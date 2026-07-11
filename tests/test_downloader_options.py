@@ -47,6 +47,7 @@ def test_download_track_moves_file_to_canonical_path_and_tags(tmp_path: Path) ->
         album="My Album",
         duration_seconds=120,
         thumbnail_url=None,
+        playlist_title="My Mix",
     )
     library_root = tmp_path / "library"
 
@@ -55,7 +56,7 @@ def test_download_track_moves_file_to_canonical_path_and_tags(tmp_path: Path) ->
     ) as mock_tag:
         final_path = download_track(task, library_root, "192", progress_hook=lambda d: None)
 
-    assert final_path == library_root / "Tracks" / "My Artist" / "My Album" / "My Song.mp3"
+    assert final_path == library_root / "My Mix" / "My Artist - My Song.mp3"
     assert final_path.exists()
     mock_tag.assert_called_once()
     called_path, called_task = mock_tag.call_args[0]

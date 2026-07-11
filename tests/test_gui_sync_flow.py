@@ -214,3 +214,105 @@ def test_download_selected_blocked_while_a_batch_is_already_running(
 
     # nothing new should have been kicked off; the guard should have returned early
     assert window._pending_download_count == 1
+
+
+def test_stop_button_cancels_in_flight_download(qtbot, tmp_path: Path, monkeypatch) -> None:
+    playlists = [RemotePlaylist("PL1", "My Mix", 1)]
+    tracks_by_playlist = {
+        "PL1": [RemoteTrack("v1", "Song One", "Artist A", None, 100, None, True)],
+    }
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    started = []
+
+    def fake_download_track(task, library_root, quality_kbps, progress_hook):
+        started.append(task.video_id)
+        # Loop forever, exactly like a real in-progress yt-dlp download would keep
+        # calling progress_hook -- relies entirely on the REAL hook (defined inside
+        # DownloadWorker.run()) raising DownloadCancelled once Stop sets the event.
+        while True:
+            progress_hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 100})
+
+    monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    window._on_playlist_selection_changed("PL1", True)
+    window._sidebar.set_playlists(playlists, {"PL1"})
+    window._on_sync_now_clicked()
+
+    qtbot.waitUntil(lambda: "v1" in started, timeout=5000)
+    assert window._stop_button.isEnabled() is True
+    assert window._sync_now_button.isEnabled() is False
+
+    window._on_stop_clicked()
+
+    qtbot.waitUntil(lambda: window._pending_download_count == 0, timeout=5000)
+    assert window._repo.get_statuses(["v1"]) == {"v1": "failed"}
+    assert window._sync_now_button.isEnabled() is True
+    assert window._stop_button.isEnabled() is False
+    assert window.statusBar().currentMessage() == "Stopped."
+
+
+def test_stop_button_prevents_a_queued_track_from_ever_downloading(qtbot, tmp_path: Path, monkeypatch) -> None:
+    playlists = [RemotePlaylist("PL1", "My Mix", 2)]
+    tracks_by_playlist = {
+        "PL1": [
+            RemoteTrack("v1", "Song One", "Artist A", None, 100, None, True),
+            RemoteTrack("v2", "Song Two", "Artist B", None, 100, None, True),
+        ],
+    }
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    from ytmusic_sync.config import Settings
+
+    monkeypatch.setattr(
+        "ytmusic_sync.gui.main_window.Settings.load",
+        classmethod(lambda cls, path: Settings(max_concurrent_downloads=1)),
+    )
+
+    started = []
+
+    def fake_download_track(task, library_root, quality_kbps, progress_hook):
+        started.append(task.video_id)
+        if task.video_id == "v1":
+            while True:
+                progress_hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 100})
+        final = library_root / f"{task.video_id}.mp3"
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_bytes(b"fake")
+        return final
+
+    monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    window._on_playlist_selection_changed("PL1", True)
+    window._sidebar.set_playlists(playlists, {"PL1"})
+    window._on_sync_now_clicked()
+
+    qtbot.waitUntil(lambda: "v1" in started, timeout=5000)
+    window._on_stop_clicked()
+
+    qtbot.waitUntil(lambda: window._pending_download_count == 0, timeout=5000)
+    # v2 was still queued (maxThreadCount=1) when Stop was clicked -- it must
+    # never have reached the real download function at all.
+    assert "v2" not in started
+    statuses = window._repo.get_statuses(["v1", "v2"])
+    assert statuses == {"v1": "failed", "v2": "failed"}

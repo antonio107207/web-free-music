@@ -12,6 +12,7 @@ class DownloadTask:
     album: str | None
     duration_seconds: int | None
     thumbnail_url: str | None
+    playlist_title: str
 
 
 @dataclass
