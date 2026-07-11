@@ -1,9 +1,11 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 
 from ytmusic_sync.gui.main_window import MainWindow
 from ytmusic_sync.remote.models import RemotePlaylist, RemoteTrack
+from ytmusic_sync.storage.repository import STATUS_DOWNLOADED
 
 
 class FakePaths:
@@ -134,3 +136,81 @@ def test_clicking_different_playlist_before_first_load_finishes_ignores_stale_re
     window._active_tracks_playlist_id = "PL2"
     window._on_tracks_ready("PL1", tracks_by_playlist["PL1"])
     assert window._tracks_view._table.rowCount() == 0
+
+
+def test_downloading_one_selected_track_leaves_others_in_playlist_untouched(
+    qtbot, tmp_path: Path, monkeypatch
+) -> None:
+    playlists = [RemotePlaylist("PL1", "My Mix", 2)]
+    tracks_by_playlist = {
+        "PL1": [
+            RemoteTrack("v1", "Song One", "Artist A", "Album A", 100, None, True),
+            RemoteTrack("v2", "Song Two", "Artist B", "Album B", 100, None, True),
+        ],
+    }
+
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    downloaded_video_ids = []
+
+    def fake_download_track(task, library_root, quality_kbps, progress_hook):
+        final = library_root / f"{task.video_id}.mp3"
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_bytes(b"fake")
+        downloaded_video_ids.append(task.video_id)
+        return final
+
+    monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    # Preview the playlist without ever checking its sidebar checkbox (i.e. NOT
+    # opted into whole-playlist sync), then hand-pick just one track to download.
+    window._on_playlist_activated("PL1")
+    qtbot.waitUntil(lambda: window._tracks_view._table.rowCount() == 2, timeout=5000)
+    assert window._sidebar.selected_playlist_ids() == []
+
+    window._tracks_view._table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+    window._tracks_view._download_button.click()
+
+    assert window._tabs.currentWidget() is window._sync_tab
+    qtbot.waitUntil(lambda: downloaded_video_ids == ["v1"], timeout=5000)
+    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+
+    statuses = window._repo.get_statuses(["v1", "v2"])
+    assert statuses["v1"] == STATUS_DOWNLOADED
+    assert statuses["v2"] == "pending"  # untouched -- only v1 was selected
+
+
+def test_download_selected_blocked_while_a_batch_is_already_running(
+    qtbot, tmp_path: Path, monkeypatch, fake_remote_data
+) -> None:
+    playlists, tracks_by_playlist = fake_remote_data
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+    # QMessageBox.information() is a blocking modal with no one to click "OK" in
+    # a headless test -- stub it out so the guard path under test doesn't hang.
+    monkeypatch.setattr("ytmusic_sync.gui.main_window.QMessageBox.information", lambda *a, **k: None)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    window._pending_download_count = 1  # simulate a batch already in flight
+    window._on_download_selected_requested(tracks_by_playlist["PL1"])
+
+    # nothing new should have been kicked off; the guard should have returned early
+    assert window._pending_download_count == 1

@@ -36,6 +36,18 @@ or, without installing the console script:
 python -m ytmusic_sync.app
 ```
 
+### Desktop shortcut (Linux)
+
+```bash
+scripts/install_desktop_entry.sh
+```
+
+Installs an app-menu entry and a Desktop icon using this machine's actual
+paths (nothing is hardcoded — `ytmusic-sync.desktop.in` is a template filled
+in at install time, so re-run this after moving/re-cloning the repo). On
+GNOME you may need to right-click the Desktop icon once and choose "Allow
+Launching" the first time.
+
 ### First-time setup
 
 On first launch, the app will ask you to connect your YouTube Music account:
