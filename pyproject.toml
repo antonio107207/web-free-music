@@ -1,0 +1,25 @@
+[project]
+name = "ytmusic-sync"
+version = "0.1.0"
+description = "Sync your YouTube Music playlists and liked songs to a local MP3 library."
+requires-python = ">=3.10"
+dependencies = [
+    "ytmusicapi>=1.12,<2",
+    "yt-dlp>=2026.7.4",
+    "PySide6>=6.11,<7",
+    "mutagen>=1.46",
+    "platformdirs>=4.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-qt", "ruff"]
+
+[project.scripts]
+ytmusic-sync = "ytmusic_sync.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ytmusic_sync"]
