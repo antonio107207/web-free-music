@@ -14,7 +14,6 @@ from mutagen.mp3 import MP3
 from ytmusic_sync.sync.tasks import DownloadTask
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_UNKNOWN_ALBUM = "Unknown Album"
 ProgressHook = Callable[[dict], None]
 
 
@@ -23,17 +22,10 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "Untitled"
 
 
-def compute_canonical_path(library_root: Path, task: DownloadTask) -> Path:
-    artist_dir = sanitize_filename(task.artist or "Unknown Artist")
-    album_dir = sanitize_filename(task.album or _UNKNOWN_ALBUM)
-    filename = sanitize_filename(task.title) + ".mp3"
-    return library_root / "Tracks" / artist_dir / album_dir / filename
-
-
-def compute_playlist_link_path(library_root: Path, playlist_title: str, task: DownloadTask) -> Path:
+def compute_track_path(library_root: Path, playlist_title: str, artist: str | None, title: str) -> Path:
     playlist_dir = sanitize_filename(playlist_title)
-    filename = sanitize_filename(f"{task.artist} - {task.title}") + ".mp3"
-    return library_root / "Playlists" / playlist_dir / filename
+    filename = sanitize_filename(f"{artist or 'Unknown Artist'} - {title}") + ".mp3"
+    return library_root / playlist_dir / filename
 
 
 def build_ydl_opts(out_template: str, quality_kbps: str, progress_hook: ProgressHook) -> dict:
@@ -90,7 +82,7 @@ def download_track(
         mp3_path = mp3_candidates[0]
         tag_mp3(mp3_path, task)
 
-        final_path = compute_canonical_path(library_root, task)
+        final_path = compute_track_path(library_root, task.playlist_title, task.artist, task.title)
         final_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(mp3_path), str(final_path))
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -58,6 +61,7 @@ class MainWindow(QMainWindow):
         self._tracks_signals = TracksFetchSignals()
         self._pending_download_count = 0
         self._active_tracks_playlist_id: str | None = None
+        self._cancel_event: threading.Event | None = None
 
         self.setWindowTitle("YT Music Sync")
         self.resize(900, 640)
@@ -70,11 +74,18 @@ class MainWindow(QMainWindow):
         self._sync_now_button = QPushButton("Sync Now")
         self._sync_now_button.clicked.connect(self._on_sync_now_clicked)
 
+        self._stop_button = QPushButton("Stop")
+        self._stop_button.setEnabled(False)
+        self._stop_button.clicked.connect(self._on_stop_clicked)
+
         self._progress_panel = ProgressPanel()
 
         self._sync_tab = QWidget()
         sync_layout = QVBoxLayout(self._sync_tab)
-        sync_layout.addWidget(self._sync_now_button)
+        sync_buttons_row = QHBoxLayout()
+        sync_buttons_row.addWidget(self._sync_now_button)
+        sync_buttons_row.addWidget(self._stop_button)
+        sync_layout.addLayout(sync_buttons_row)
         sync_layout.addWidget(self._progress_panel, stretch=1)
 
         self._tracks_view = PlaylistTracksView()
@@ -246,6 +257,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Download in progress", "Please wait for the current download to finish.")
             return
 
+        playlist = next(
+            (p for p in self._remote_playlists if p.playlist_id == self._active_tracks_playlist_id), None
+        )
+        playlist_title = playlist.title if playlist is not None else "Unknown Playlist"
         tasks = [
             DownloadTask(
                 video_id=t.video_id,
@@ -254,6 +269,7 @@ class MainWindow(QMainWindow):
                 album=t.album,
                 duration_seconds=t.duration_seconds,
                 thumbnail_url=t.thumbnail_url,
+                playlist_title=playlist_title,
             )
             for t in tracks
         ]
@@ -264,6 +280,7 @@ class MainWindow(QMainWindow):
         self._settings = Settings.load(self._paths.settings_file)
         QThreadPool.globalInstance().setMaxThreadCount(max(1, self._settings.max_concurrent_downloads))
 
+        self._cancel_event = threading.Event()
         self._set_download_controls_enabled(False)
         self._progress_panel.set_tasks(tasks)
         self._pending_download_count = len(tasks)
@@ -272,13 +289,25 @@ class MainWindow(QMainWindow):
         for task in tasks:
             self._repo.mark_downloading(task.video_id)
             worker = DownloadWorker(
-                task, self._download_signals, self._settings.library_root, self._settings.mp3_quality_kbps
+                task,
+                self._download_signals,
+                self._settings.library_root,
+                self._settings.mp3_quality_kbps,
+                self._cancel_event,
             )
             QThreadPool.globalInstance().start(worker)
+
+    def _on_stop_clicked(self) -> None:
+        if self._cancel_event is None:
+            return
+        self._cancel_event.set()
+        self._stop_button.setEnabled(False)
+        self.statusBar().showMessage("Stopping...")
 
     def _set_download_controls_enabled(self, enabled: bool) -> None:
         self._sync_now_button.setEnabled(enabled)
         self._tracks_view.set_downloading_enabled(enabled)
+        self._stop_button.setEnabled(not enabled)
 
     def _on_track_finished(self, video_id: str, success: bool, message: str) -> None:
         self._progress_panel.mark_finished(video_id, success, message)
@@ -289,9 +318,11 @@ class MainWindow(QMainWindow):
 
         self._pending_download_count -= 1
         if self._pending_download_count <= 0:
+            was_cancelled = self._cancel_event is not None and self._cancel_event.is_set()
+            self._cancel_event = None
             refresh_playlist_folder_links(self._repo, self._settings.library_root)
             self._set_download_controls_enabled(True)
-            self.statusBar().showMessage("Sync complete.")
+            self.statusBar().showMessage("Stopped." if was_cancelled else "Sync complete.")
             self._library_browser.refresh()
             if self._active_tracks_playlist_id is not None:
                 self._on_playlist_activated(self._active_tracks_playlist_id)

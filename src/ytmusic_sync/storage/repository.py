@@ -153,6 +153,33 @@ class LibraryRepository:
             for r in rows
         ]
 
+    def get_playlist_titles_for_tracks(
+        self, video_ids: list[str], playlist_ids: list[str]
+    ) -> dict[str, list[str]]:
+        """Playlist titles each of the given tracks belongs to, restricted to the
+        given playlist_ids (e.g. the set currently selected for sync). Used to
+        pick a download folder for a track that may belong to more than one of
+        the playlists being synced in this batch.
+        """
+        if not video_ids or not playlist_ids:
+            return {}
+        video_placeholders = ",".join("?" for _ in video_ids)
+        playlist_placeholders = ",".join("?" for _ in playlist_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT pt.video_id, p.title AS playlist_title
+            FROM playlist_tracks pt
+            JOIN playlists p ON p.playlist_id = pt.playlist_id
+            WHERE pt.video_id IN ({video_placeholders})
+              AND pt.playlist_id IN ({playlist_placeholders})
+            """,
+            (*video_ids, *playlist_ids),
+        ).fetchall()
+        result: dict[str, list[str]] = {}
+        for r in rows:
+            result.setdefault(r["video_id"], []).append(r["playlist_title"])
+        return result
+
     def get_statuses(self, video_ids: list[str]) -> dict[str, str]:
         if not video_ids:
             return {}

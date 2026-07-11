@@ -76,20 +76,28 @@ elsewhere) — if that happens, the app will prompt you to reconnect
 ## Usage
 
 1. Check the playlists (and/or "Liked Songs") you want to keep synced in the
-   left sidebar.
-2. Click **Sync Now**. New tracks download in the background; already
-   downloaded tracks are skipped on future syncs.
+   left sidebar, or click a playlist to preview its tracks and download
+   individual ones from the **Tracks** tab.
+2. Click **Sync Now** (or **Download Selected** for individual tracks). New
+   tracks download in the background; already downloaded tracks are skipped
+   on future syncs. Click **Stop** at any point to cancel the rest of the
+   queue — anything already downloaded is kept.
 3. Browse your local library, search, reveal files in your file manager, or
    queue a re-download from the **Library** tab.
 
 Downloaded files are organized under your configured library folder
-(default `~/Music/YTMusicSync`):
+(default `~/Music/YTMusicSync`), one folder per playlist:
 
 ```
 YTMusicSync/
-  Tracks/<Artist>/<Album>/<Title>.mp3     # canonical copy, one per track
-  Playlists/<Playlist Name>/<...>.mp3     # hardlinks mirroring your playlists
+  <Playlist Name>/<Artist> - <Title>.mp3
+  <Other Playlist Name>/<Artist> - <Title>.mp3
 ```
+
+A track that belongs to more than one playlist is only downloaded once (its
+real file lives under whichever playlist it landed in first); it also
+appears in its other playlists' folders as a hardlink to that same file, so
+it never uses extra disk space or gets downloaded twice.
 
 Settings (library folder, MP3 bitrate, max concurrent downloads) are under
 `File > Settings...`.
