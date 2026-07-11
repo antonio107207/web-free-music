@@ -8,10 +8,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 from yt_dlp.utils import DownloadCancelled
 
 from ytmusic_sync.remote.client import YTMusicClient
-from ytmusic_sync.remote.models import RemotePlaylist
-from ytmusic_sync.storage.repository import LibraryRepository
 from ytmusic_sync.sync.downloader import download_track
-from ytmusic_sync.sync.planner import build_sync_plan
 from ytmusic_sync.sync.tasks import DownloadTask
 
 logger = logging.getLogger(__name__)
@@ -95,42 +92,3 @@ class TracksFetchWorker(QRunnable):
         except Exception as e:  # noqa: BLE001 - report any failure back to the GUI
             logger.exception("Failed to fetch tracks for playlist %s", self._playlist_id)
             self._signals.tracks_failed.emit(self._playlist_id, str(e))
-
-
-class PlanSignals(QObject):
-    plan_ready = Signal(list)
-    plan_failed = Signal(str)
-
-
-class PlanWorker(QRunnable):
-    """Runs on a background thread, so it opens its own short-lived LibraryRepository
-    connection to the db file rather than sharing the main thread's connection object
-    (sqlite3.Connection objects aren't safe to use across threads)."""
-
-    def __init__(
-        self,
-        db_path: Path,
-        client: YTMusicClient,
-        selected_playlist_ids: list[str],
-        remote_playlists: list[RemotePlaylist],
-        signals: PlanSignals,
-    ) -> None:
-        super().__init__()
-        self._db_path = db_path
-        self._client = client
-        self._selected_playlist_ids = selected_playlist_ids
-        self._remote_playlists = remote_playlists
-        self._signals = signals
-
-    def run(self) -> None:
-        repo = LibraryRepository(self._db_path)
-        try:
-            tasks = build_sync_plan(
-                repo, self._client, self._selected_playlist_ids, self._remote_playlists
-            )
-            self._signals.plan_ready.emit(tasks)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("Sync planning failed for playlists %s", self._selected_playlist_ids)
-            self._signals.plan_failed.emit(str(e))
-        finally:
-            repo.close()

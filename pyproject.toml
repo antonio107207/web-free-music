@@ -9,6 +9,7 @@ dependencies = [
     "PySide6>=6.11,<7",
     "mutagen>=1.46",
     "platformdirs>=4.2",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
