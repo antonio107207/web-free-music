@@ -80,6 +80,19 @@ def test_track_shared_across_playlists_downloads_once(repo: LibraryRepository) -
     assert repo.get_pending_tracks(["PL1", "PL2"]) == []
 
 
+def test_get_statuses_returns_status_per_video_id(repo: LibraryRepository) -> None:
+    playlist, tracks = _playlist_and_tracks()
+    repo.upsert_remote_snapshot(playlist, tracks)
+    repo.mark_downloaded("v1", Path("/tmp/v1.mp3"))
+
+    statuses = repo.get_statuses(["v1", "v2", "v3", "does-not-exist"])
+    assert statuses == {"v1": STATUS_DOWNLOADED, "v2": "pending", "v3": STATUS_UNAVAILABLE}
+
+
+def test_get_statuses_empty_input_returns_empty_dict(repo: LibraryRepository) -> None:
+    assert repo.get_statuses([]) == {}
+
+
 def test_duplicate_track_within_same_playlist_does_not_crash(repo: LibraryRepository) -> None:
     # Real playlists can contain the same track more than once (added twice by
     # the user). This used to raise "UNIQUE constraint failed: playlist_tracks
