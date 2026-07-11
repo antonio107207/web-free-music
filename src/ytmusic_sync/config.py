@@ -30,6 +30,10 @@ class AppPaths:
     def db_file(self) -> Path:
         return self.data_dir / "library.sqlite3"
 
+    @property
+    def webview_profile_dir(self) -> Path:
+        return self.config_dir / "webview_profile"
+
     def secure_auth_file(self) -> None:
         if self.auth_file.exists():
             self.auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)

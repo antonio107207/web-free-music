@@ -19,7 +19,6 @@ from ytmusic_sync.gui.playlist_sidebar import PlaylistSidebar
 from ytmusic_sync.gui.playlist_tracks_view import PlaylistTracksView
 from ytmusic_sync.gui.progress_panel import ProgressPanel
 from ytmusic_sync.gui.settings_dialog import SettingsDialog
-from ytmusic_sync.gui.setup_dialog import SetupDialog
 from ytmusic_sync.gui.workers import (
     DownloadSignals,
     DownloadWorker,
@@ -33,6 +32,15 @@ from ytmusic_sync.remote.models import RemotePlaylist
 from ytmusic_sync.storage.repository import LibraryRepository
 from ytmusic_sync.sync.planner import refresh_playlist_folder_links
 from ytmusic_sync.sync.tasks import DownloadTask
+
+try:
+    from ytmusic_sync.gui.login_web_view_dialog import LoginWebViewDialog as _SetupDialogImpl
+
+    _SETUP_DIALOG_NEEDS_PATHS = True
+except ImportError:  # pragma: no cover - only exercised if QtWebEngine is unavailable
+    from ytmusic_sync.gui.setup_dialog import SetupDialog as _SetupDialogImpl
+
+    _SETUP_DIALOG_NEEDS_PATHS = False
 
 
 class MainWindow(QMainWindow):
@@ -129,8 +137,11 @@ class MainWindow(QMainWindow):
         self._run_setup_dialog()
 
     def _run_setup_dialog(self) -> bool:
-        dialog = SetupDialog(self._auth_manager, self)
-        return dialog.exec() == SetupDialog.DialogCode.Accepted
+        if _SETUP_DIALOG_NEEDS_PATHS:
+            dialog = _SetupDialogImpl(self._auth_manager, self._paths, self)
+        else:
+            dialog = _SetupDialogImpl(self._auth_manager, self)
+        return dialog.exec() == _SetupDialogImpl.DialogCode.Accepted
 
     def refresh_playlists(self) -> None:
         try:

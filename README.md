@@ -44,19 +44,30 @@ scripts/install_desktop_entry.sh
 
 Installs an app-menu entry and a Desktop icon using this machine's actual
 paths (nothing is hardcoded — `ytmusic-sync.desktop.in` is a template filled
-in at install time, so re-run this after moving/re-cloning the repo). On
-GNOME you may need to right-click the Desktop icon once and choose "Allow
-Launching" the first time.
+in at install time, so re-run this after moving/re-cloning the repo).
+
+On GNOME, the Desktop icon will show as a generic file icon and won't launch
+until you right-click it and choose **"Allow Launching"** once — this is a
+deliberate Nautilus security step for any `.desktop` file on the Desktop
+(there's no way to pre-approve it from a script). The app-menu entry doesn't
+need this and shows the correct icon immediately.
 
 ### First-time setup
 
-On first launch, the app will ask you to connect your YouTube Music account:
+On first launch, the app opens an embedded browser window — just log in to
+YouTube Music with your Google account normally. The window closes and your
+session is captured automatically once login completes; nothing to copy or
+paste. A persistent login profile means future re-authentication is usually
+just as fast (you'll often already be signed in).
 
-1. Open `music.youtube.com` in your browser and make sure you're logged in.
+If the embedded browser can't load for some reason, click "Trouble logging
+in? Paste cookie manually" for the old manual flow:
+
+1. Open `music.youtube.com` in your own browser and make sure you're logged in.
 2. Open Developer Tools (F12) → the **Console** tab.
 3. Type `copy(document.cookie)` and press Enter — this copies your session
    cookie straight to your clipboard (nothing will print, that's expected).
-4. Paste it into the app's setup dialog and click "Save & Continue".
+4. Paste it into the dialog and click "Save & Continue".
 
 Your saved login can expire at any time (if you log out or clear cookies
 elsewhere) — if that happens, the app will prompt you to reconnect
