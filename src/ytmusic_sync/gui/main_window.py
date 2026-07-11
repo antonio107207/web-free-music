@@ -16,10 +16,18 @@ from ytmusic_sync.auth.ytm_auth import AuthError, YTMAuthManager
 from ytmusic_sync.config import AppPaths, Settings
 from ytmusic_sync.gui.library_browser import LibraryBrowser
 from ytmusic_sync.gui.playlist_sidebar import PlaylistSidebar
+from ytmusic_sync.gui.playlist_tracks_view import PlaylistTracksView
 from ytmusic_sync.gui.progress_panel import ProgressPanel
 from ytmusic_sync.gui.settings_dialog import SettingsDialog
 from ytmusic_sync.gui.setup_dialog import SetupDialog
-from ytmusic_sync.gui.workers import DownloadSignals, DownloadWorker, PlanSignals, PlanWorker
+from ytmusic_sync.gui.workers import (
+    DownloadSignals,
+    DownloadWorker,
+    PlanSignals,
+    PlanWorker,
+    TracksFetchSignals,
+    TracksFetchWorker,
+)
 from ytmusic_sync.remote.client import YTMusicClient
 from ytmusic_sync.remote.models import RemotePlaylist
 from ytmusic_sync.storage.repository import LibraryRepository
@@ -38,7 +46,9 @@ class MainWindow(QMainWindow):
         self._remote_playlists: list[RemotePlaylist] = []
         self._download_signals = DownloadSignals()
         self._plan_signals = PlanSignals()
+        self._tracks_signals = TracksFetchSignals()
         self._pending_download_count = 0
+        self._active_tracks_playlist_id: str | None = None
 
         self.setWindowTitle("YT Music Sync")
         self.resize(900, 640)
@@ -46,6 +56,7 @@ class MainWindow(QMainWindow):
         self._sidebar = PlaylistSidebar()
         self._sidebar.refresh_requested.connect(self.refresh_playlists)
         self._sidebar.selection_changed.connect(self._on_playlist_selection_changed)
+        self._sidebar.playlist_activated.connect(self._on_playlist_activated)
 
         self._sync_now_button = QPushButton("Sync Now")
         self._sync_now_button.clicked.connect(self._on_sync_now_clicked)
@@ -57,15 +68,17 @@ class MainWindow(QMainWindow):
         sync_layout.addWidget(self._sync_now_button)
         sync_layout.addWidget(self._progress_panel, stretch=1)
 
+        self._tracks_view = PlaylistTracksView()
         self._library_browser = LibraryBrowser(self._repo)
 
-        tabs = QTabWidget()
-        tabs.addTab(sync_tab, "Sync")
-        tabs.addTab(self._library_browser, "Library")
+        self._tabs = QTabWidget()
+        self._tabs.addTab(sync_tab, "Sync")
+        self._tabs.addTab(self._tracks_view, "Tracks")
+        self._tabs.addTab(self._library_browser, "Library")
 
         splitter = QSplitter()
         splitter.addWidget(self._sidebar)
-        splitter.addWidget(tabs)
+        splitter.addWidget(self._tabs)
         splitter.setSizes([260, 640])
         self.setCentralWidget(splitter)
         self.setStatusBar(QStatusBar())
@@ -76,6 +89,8 @@ class MainWindow(QMainWindow):
         self._download_signals.track_finished.connect(self._on_track_finished)
         self._plan_signals.plan_ready.connect(self._on_plan_ready)
         self._plan_signals.plan_failed.connect(self._on_plan_failed)
+        self._tracks_signals.tracks_ready.connect(self._on_tracks_ready)
+        self._tracks_signals.tracks_failed.connect(self._on_tracks_failed)
 
         self._ensure_authenticated()
         self.refresh_playlists()
@@ -148,6 +163,36 @@ class MainWindow(QMainWindow):
     def _on_playlist_selection_changed(self, playlist_id: str, checked: bool) -> None:
         self._repo.set_playlist_selected(playlist_id, checked)
 
+    def _on_playlist_activated(self, playlist_id: str) -> None:
+        if self._client is None:
+            return
+        playlist = next((p for p in self._remote_playlists if p.playlist_id == playlist_id), None)
+        if playlist is None:
+            return
+
+        self._active_tracks_playlist_id = playlist_id
+        self._tracks_view.show_loading(playlist.title)
+        self._tabs.setCurrentWidget(self._tracks_view)
+
+        worker = TracksFetchWorker(self._client, playlist_id, self._tracks_signals)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_tracks_ready(self, playlist_id: str, tracks: list) -> None:
+        if playlist_id != self._active_tracks_playlist_id:
+            return  # user clicked a different playlist before this one finished loading
+        playlist = next((p for p in self._remote_playlists if p.playlist_id == playlist_id), None)
+        if playlist is None:
+            return
+        statuses = self._repo.get_statuses([t.video_id for t in tracks])
+        self._tracks_view.show_tracks(playlist.title, tracks, statuses)
+
+    def _on_tracks_failed(self, playlist_id: str, message: str) -> None:
+        if playlist_id != self._active_tracks_playlist_id:
+            return
+        playlist = next((p for p in self._remote_playlists if p.playlist_id == playlist_id), None)
+        title = playlist.title if playlist else playlist_id
+        self._tracks_view.show_error(title, message)
+
     def _on_sync_now_clicked(self) -> None:
         if self._client is None:
             return
@@ -200,3 +245,5 @@ class MainWindow(QMainWindow):
             self._sync_now_button.setEnabled(True)
             self.statusBar().showMessage("Sync complete.")
             self._library_browser.refresh()
+            if self._active_tracks_playlist_id is not None:
+                self._on_playlist_activated(self._active_tracks_playlist_id)

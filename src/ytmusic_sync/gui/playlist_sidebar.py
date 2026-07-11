@@ -10,6 +10,7 @@ _PLAYLIST_ID_ROLE = Qt.ItemDataRole.UserRole
 
 class PlaylistSidebar(QWidget):
     selection_changed = Signal(str, bool)  # playlist_id, checked
+    playlist_activated = Signal(str)  # playlist_id, emitted when a row is clicked
     refresh_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -21,6 +22,7 @@ class PlaylistSidebar(QWidget):
         self._tree = QTreeWidget()
         self._tree.setHeaderLabels(["Playlist"])
         self._tree.itemChanged.connect(self._on_item_changed)
+        self._tree.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._tree, stretch=1)
 
         refresh_button = QPushButton("Refresh")
@@ -55,3 +57,8 @@ class PlaylistSidebar(QWidget):
         playlist_id = item.data(0, _PLAYLIST_ID_ROLE)
         checked = item.checkState(0) == Qt.CheckState.Checked
         self.selection_changed.emit(playlist_id, checked)
+
+    def _on_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        if self._updating:
+            return
+        self.playlist_activated.emit(item.data(0, _PLAYLIST_ID_ROLE))

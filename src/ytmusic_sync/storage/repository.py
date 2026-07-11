@@ -153,6 +153,16 @@ class LibraryRepository:
             for r in rows
         ]
 
+    def get_statuses(self, video_ids: list[str]) -> dict[str, str]:
+        if not video_ids:
+            return {}
+        placeholders = ",".join("?" for _ in video_ids)
+        rows = self._conn.execute(
+            f"SELECT video_id, status FROM tracks WHERE video_id IN ({placeholders})",
+            video_ids,
+        ).fetchall()
+        return {r["video_id"]: r["status"] for r in rows}
+
     def mark_downloading(self, video_id: str) -> None:
         self._conn.execute(
             "UPDATE tracks SET status = ?, error_message = NULL WHERE video_id = ?",

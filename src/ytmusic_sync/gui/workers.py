@@ -57,6 +57,27 @@ class DownloadWorker(QRunnable):
             self._signals.track_finished.emit(self._task.video_id, False, str(e))
 
 
+class TracksFetchSignals(QObject):
+    tracks_ready = Signal(str, list)  # playlist_id, list[RemoteTrack]
+    tracks_failed = Signal(str, str)  # playlist_id, error message
+
+
+class TracksFetchWorker(QRunnable):
+    def __init__(self, client: YTMusicClient, playlist_id: str, signals: TracksFetchSignals) -> None:
+        super().__init__()
+        self._client = client
+        self._playlist_id = playlist_id
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            tracks = self._client.list_playlist_tracks(self._playlist_id)
+            self._signals.tracks_ready.emit(self._playlist_id, tracks)
+        except Exception as e:  # noqa: BLE001 - report any failure back to the GUI
+            logger.exception("Failed to fetch tracks for playlist %s", self._playlist_id)
+            self._signals.tracks_failed.emit(self._playlist_id, str(e))
+
+
 class PlanSignals(QObject):
     plan_ready = Signal(list)
     plan_failed = Signal(str)
