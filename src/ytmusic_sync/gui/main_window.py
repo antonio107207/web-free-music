@@ -25,14 +25,12 @@ from ytmusic_sync.gui.settings_dialog import SettingsDialog
 from ytmusic_sync.gui.workers import (
     DownloadSignals,
     DownloadWorker,
-    PlanSignals,
-    PlanWorker,
     TracksFetchSignals,
     TracksFetchWorker,
 )
 from ytmusic_sync.remote.client import YTMusicClient
 from ytmusic_sync.remote.models import RemotePlaylist
-from ytmusic_sync.storage.repository import LibraryRepository
+from ytmusic_sync.storage.repository import STATUS_DOWNLOADED, LibraryRepository
 from ytmusic_sync.sync.planner import refresh_playlist_folder_links
 from ytmusic_sync.sync.tasks import DownloadTask
 
@@ -57,7 +55,6 @@ class MainWindow(QMainWindow):
         self._client: YTMusicClient | None = None
         self._remote_playlists: list[RemotePlaylist] = []
         self._download_signals = DownloadSignals()
-        self._plan_signals = PlanSignals()
         self._tracks_signals = TracksFetchSignals()
         self._pending_download_count = 0
         self._active_tracks_playlist_id: str | None = None
@@ -70,11 +67,7 @@ class MainWindow(QMainWindow):
 
         self._sidebar = PlaylistSidebar()
         self._sidebar.refresh_requested.connect(self.refresh_playlists)
-        self._sidebar.selection_changed.connect(self._on_playlist_selection_changed)
         self._sidebar.playlist_activated.connect(self._on_playlist_activated)
-
-        self._sync_now_button = QPushButton("Sync Now")
-        self._sync_now_button.clicked.connect(self._on_sync_now_clicked)
 
         self._stop_button = QPushButton("Stop")
         self._stop_button.setEnabled(False)
@@ -89,7 +82,6 @@ class MainWindow(QMainWindow):
         self._sync_tab = QWidget()
         sync_layout = QVBoxLayout(self._sync_tab)
         sync_buttons_row = QHBoxLayout()
-        sync_buttons_row.addWidget(self._sync_now_button)
         sync_buttons_row.addWidget(self._stop_button)
         sync_buttons_row.addWidget(self._retry_failed_button)
         sync_layout.addLayout(sync_buttons_row)
@@ -100,7 +92,7 @@ class MainWindow(QMainWindow):
         self._library_browser = LibraryBrowser(self._repo)
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._sync_tab, "Sync")
+        self._tabs.addTab(self._sync_tab, "Downloads")
         self._tabs.addTab(self._tracks_view, "Tracks")
         self._tabs.addTab(self._library_browser, "Library")
 
@@ -115,8 +107,6 @@ class MainWindow(QMainWindow):
         self._download_signals.track_started.connect(self._progress_panel.mark_started)
         self._download_signals.track_progress.connect(self._progress_panel.update_progress)
         self._download_signals.track_finished.connect(self._on_track_finished)
-        self._plan_signals.plan_ready.connect(self._on_plan_ready)
-        self._plan_signals.plan_failed.connect(self._on_plan_failed)
         self._tracks_signals.tracks_ready.connect(self._on_tracks_ready)
         self._tracks_signals.tracks_failed.connect(self._on_tracks_failed)
 
@@ -187,12 +177,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Failed to load playlists", str(e))
             return
 
-        selected_ids = set(self._repo.get_selected_playlist_ids())
-        self._sidebar.set_playlists(self._remote_playlists, selected_ids)
+        self._sidebar.set_playlists(self._remote_playlists)
         self.statusBar().showMessage(f"Loaded {len(self._remote_playlists)} playlists.")
-
-    def _on_playlist_selection_changed(self, playlist_id: str, checked: bool) -> None:
-        self._repo.set_playlist_selected(playlist_id, checked)
 
     def _on_playlist_activated(self, playlist_id: str) -> None:
         if self._client is None:
@@ -215,8 +201,7 @@ class MainWindow(QMainWindow):
         if playlist is None:
             return
         # Keep the local index up to date with what's actually in the playlist right
-        # now, so per-track status/downloads work even if this playlist was never
-        # checked for whole-playlist sync.
+        # now, so per-track status/downloads work correctly.
         self._repo.upsert_remote_snapshot(playlist, tracks)
         statuses = self._repo.get_statuses([t.video_id for t in tracks])
         self._tracks_view.show_tracks(playlist.title, tracks, statuses)
@@ -228,40 +213,17 @@ class MainWindow(QMainWindow):
         title = playlist.title if playlist else playlist_id
         self._tracks_view.show_error(title, message)
 
-    def _on_sync_now_clicked(self) -> None:
-        if self._client is None:
-            return
-        if self._pending_download_count > 0:
-            QMessageBox.information(self, "Download in progress", "Please wait for the current download to finish.")
-            return
-        selected_ids = self._sidebar.selected_playlist_ids()
-        if not selected_ids:
-            QMessageBox.information(self, "Nothing selected", "Select at least one playlist to sync.")
-            return
-
-        self._set_download_controls_enabled(False)
-        self.statusBar().showMessage("Planning sync...")
-        plan_worker = PlanWorker(
-            self._paths.db_file, self._client, selected_ids, self._remote_playlists, self._plan_signals
-        )
-        QThreadPool.globalInstance().start(plan_worker)
-
-    def _on_plan_failed(self, message: str) -> None:
-        self._set_download_controls_enabled(True)
-        QMessageBox.critical(self, "Sync planning failed", message)
-
-    def _on_plan_ready(self, tasks: list) -> None:
-        if not tasks:
-            self.statusBar().showMessage("Everything is already up to date.")
-            self._set_download_controls_enabled(True)
-            return
-        self._start_downloads(tasks)
-
     def _on_download_selected_requested(self, tracks: list) -> None:
         if self._client is None:
             return
         if self._pending_download_count > 0:
             QMessageBox.information(self, "Download in progress", "Please wait for the current download to finish.")
+            return
+
+        statuses = self._repo.get_statuses([t.video_id for t in tracks])
+        pending_tracks = [t for t in tracks if statuses.get(t.video_id) != STATUS_DOWNLOADED]
+        if not pending_tracks:
+            self.statusBar().showMessage("Everything selected is already downloaded.")
             return
 
         playlist = next(
@@ -278,7 +240,7 @@ class MainWindow(QMainWindow):
                 thumbnail_url=t.thumbnail_url,
                 playlist_title=playlist_title,
             )
-            for t in tracks
+            for t in pending_tracks
         ]
         self._tabs.setCurrentWidget(self._sync_tab)
         self._start_downloads(tasks)
@@ -321,7 +283,6 @@ class MainWindow(QMainWindow):
         self._start_downloads(tasks)
 
     def _set_download_controls_enabled(self, enabled: bool) -> None:
-        self._sync_now_button.setEnabled(enabled)
         self._tracks_view.set_downloading_enabled(enabled)
         self._stop_button.setEnabled(not enabled)
         self._retry_failed_button.setEnabled(enabled and bool(self._failed_tasks))

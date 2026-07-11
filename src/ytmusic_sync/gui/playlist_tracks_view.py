@@ -45,7 +45,7 @@ class PlaylistTracksView(QWidget):
         layout.addWidget(self._title_label)
 
         toolbar = QHBoxLayout()
-        self._select_all_checkbox = QCheckBox("Select all")
+        self._select_all_checkbox = QCheckBox("Select whole playlist")
         self._select_all_checkbox.stateChanged.connect(self._on_select_all_toggled)
         toolbar.addWidget(self._select_all_checkbox)
         toolbar.addStretch(1)

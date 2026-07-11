@@ -36,7 +36,12 @@ def fake_remote_data():
     return playlists, tracks
 
 
-def test_sync_now_downloads_selected_playlist_and_updates_repo(
+def _open_playlist_and_wait(qtbot, window, playlist_id: str, expected_row_count: int) -> None:
+    window._on_playlist_activated(playlist_id)
+    qtbot.waitUntil(lambda: window._tracks_view._table.rowCount() == expected_row_count, timeout=5000)
+
+
+def test_selecting_whole_playlist_and_downloading_updates_repo(
     qtbot, tmp_path: Path, monkeypatch, fake_remote_data
 ) -> None:
     playlists, tracks_by_playlist = fake_remote_data
@@ -62,22 +67,15 @@ def test_sync_now_downloads_selected_playlist_and_updates_repo(
 
     monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
 
-    paths = FakePaths(tmp_path)
-    auth_manager = FakeAuthManager()
-
-    window = MainWindow(auth_manager, paths)
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
     qtbot.addWidget(window)
 
-    assert window._sidebar.selected_playlist_ids() == []
-    # simulate the user checking the playlist checkbox
-    window._on_playlist_selection_changed("PL1", True)
-    window._sidebar.set_playlists(playlists, {"PL1"})
-
-    window._on_sync_now_clicked()
-    assert window._sync_now_button.isEnabled() is False
+    _open_playlist_and_wait(qtbot, window, "PL1", 1)
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
 
     qtbot.waitUntil(lambda: len(downloaded_paths) == 1, timeout=5000)
-    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    qtbot.waitUntil(lambda: window._tracks_view._download_button.isEnabled(), timeout=5000)
 
     assert window.statusBar().currentMessage() == "Sync complete."
     pending = window._repo.get_pending_tracks(["PL1"])
@@ -172,22 +170,89 @@ def test_downloading_one_selected_track_leaves_others_in_playlist_untouched(
     window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
     qtbot.addWidget(window)
 
-    # Preview the playlist without ever checking its sidebar checkbox (i.e. NOT
-    # opted into whole-playlist sync), then hand-pick just one track to download.
-    window._on_playlist_activated("PL1")
-    qtbot.waitUntil(lambda: window._tracks_view._table.rowCount() == 2, timeout=5000)
-    assert window._sidebar.selected_playlist_ids() == []
+    _open_playlist_and_wait(qtbot, window, "PL1", 2)
 
     window._tracks_view._table.item(0, 0).setCheckState(Qt.CheckState.Checked)
     window._tracks_view._download_button.click()
 
     assert window._tabs.currentWidget() is window._sync_tab
     qtbot.waitUntil(lambda: downloaded_video_ids == ["v1"], timeout=5000)
-    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    qtbot.waitUntil(lambda: window._tracks_view._download_button.isEnabled(), timeout=5000)
 
     statuses = window._repo.get_statuses(["v1", "v2"])
     assert statuses["v1"] == STATUS_DOWNLOADED
     assert statuses["v2"] == "pending"  # untouched -- only v1 was selected
+
+
+def test_download_selected_skips_already_downloaded_tracks(
+    qtbot, tmp_path: Path, monkeypatch
+) -> None:
+    playlists = [RemotePlaylist("PL1", "My Mix", 2)]
+    tracks_by_playlist = {
+        "PL1": [
+            RemoteTrack("v1", "Song One", "Artist A", None, 100, None, True),
+            RemoteTrack("v2", "Song Two", "Artist B", None, 100, None, True),
+        ],
+    }
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    started = []
+
+    def fake_download_track(task, library_root, quality_kbps, progress_hook):
+        started.append(task.video_id)
+        final = library_root / f"{task.video_id}.mp3"
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_bytes(b"fake")
+        return final
+
+    monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    _open_playlist_and_wait(qtbot, window, "PL1", 2)
+    window._repo.mark_downloaded("v1", tmp_path / "already-here.mp3")
+
+    # select the whole playlist, including the already-downloaded v1
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
+
+    qtbot.waitUntil(lambda: started == ["v2"], timeout=5000)
+    qtbot.waitUntil(lambda: window._tracks_view._download_button.isEnabled(), timeout=5000)
+    assert "v1" not in started  # already downloaded -- must not be re-fetched
+
+
+def test_download_selected_noop_when_everything_already_downloaded(
+    qtbot, tmp_path: Path, monkeypatch, fake_remote_data
+) -> None:
+    playlists, tracks_by_playlist = fake_remote_data
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    _open_playlist_and_wait(qtbot, window, "PL1", 1)
+    window._repo.mark_downloaded("v1", tmp_path / "already-here.mp3")
+
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
+
+    assert window._pending_download_count == 0
+    assert window.statusBar().currentMessage() == "Everything selected is already downloaded."
 
 
 def test_download_selected_blocked_while_a_batch_is_already_running(
@@ -245,19 +310,19 @@ def test_stop_button_cancels_in_flight_download(qtbot, tmp_path: Path, monkeypat
     window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
     qtbot.addWidget(window)
 
-    window._on_playlist_selection_changed("PL1", True)
-    window._sidebar.set_playlists(playlists, {"PL1"})
-    window._on_sync_now_clicked()
+    _open_playlist_and_wait(qtbot, window, "PL1", 1)
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
 
     qtbot.waitUntil(lambda: "v1" in started, timeout=5000)
     assert window._stop_button.isEnabled() is True
-    assert window._sync_now_button.isEnabled() is False
+    assert window._tracks_view._download_button.isEnabled() is False
 
     window._on_stop_clicked()
 
     qtbot.waitUntil(lambda: window._pending_download_count == 0, timeout=5000)
     assert window._repo.get_statuses(["v1"]) == {"v1": "failed"}
-    assert window._sync_now_button.isEnabled() is True
+    assert window._tracks_view._download_button.isEnabled() is True
     assert window._stop_button.isEnabled() is False
     assert window.statusBar().currentMessage() == "Stopped."
 
@@ -303,9 +368,9 @@ def test_stop_button_prevents_a_queued_track_from_ever_downloading(qtbot, tmp_pa
     window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
     qtbot.addWidget(window)
 
-    window._on_playlist_selection_changed("PL1", True)
-    window._sidebar.set_playlists(playlists, {"PL1"})
-    window._on_sync_now_clicked()
+    _open_playlist_and_wait(qtbot, window, "PL1", 2)
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
 
     qtbot.waitUntil(lambda: "v1" in started, timeout=5000)
     window._on_stop_clicked()
@@ -354,14 +419,12 @@ def test_retry_failed_requeues_only_failed_tracks(qtbot, tmp_path: Path, monkeyp
     window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
     qtbot.addWidget(window)
 
-    window._on_playlist_selection_changed("PL1", True)
-    window._sidebar.set_playlists(playlists, {"PL1"})
-    window._on_sync_now_clicked()
+    _open_playlist_and_wait(qtbot, window, "PL1", 2)
+    window._tracks_view._select_all_checkbox.setChecked(True)
+    window._tracks_view._download_button.click()
 
-    # waiting on _pending_download_count alone races: it's already 0 before the
-    # background PlanWorker has even started, so wait for real activity first.
     qtbot.waitUntil(lambda: len(downloaded) >= 1, timeout=5000)
-    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    qtbot.waitUntil(lambda: window._tracks_view._download_button.isEnabled(), timeout=5000)
     assert set(downloaded) == {"v2"}
     assert window._repo.get_statuses(["v1", "v2"]) == {"v1": "failed", "v2": "downloaded"}
     assert window._retry_failed_button.isEnabled() is True
@@ -370,7 +433,7 @@ def test_retry_failed_requeues_only_failed_tracks(qtbot, tmp_path: Path, monkeyp
     assert window._retry_failed_button.isEnabled() is False  # disabled immediately while retry runs
 
     qtbot.waitUntil(lambda: len(downloaded) >= 2, timeout=5000)
-    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    qtbot.waitUntil(lambda: window._tracks_view._download_button.isEnabled(), timeout=5000)
     # v1 was retried and succeeded this time; v2 was never re-downloaded
     assert downloaded == ["v2", "v1"]
     assert window._repo.get_statuses(["v1", "v2"]) == {"v1": "downloaded", "v2": "downloaded"}

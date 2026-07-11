@@ -75,15 +75,17 @@ elsewhere) — if that happens, the app will prompt you to reconnect
 
 ## Usage
 
-1. Check the playlists (and/or "Liked Songs") you want to keep synced in the
-   left sidebar, or click a playlist to preview its tracks and download
-   individual ones from the **Tracks** tab.
-2. Click **Sync Now** (or **Download Selected** for individual tracks). New
-   tracks download in the background; already downloaded tracks are skipped
-   on future syncs. Click **Stop** at any point to cancel the rest of the
-   queue — anything already downloaded is kept.
-3. Browse your local library, search, reveal files in your file manager, or
-   queue a re-download from the **Library** tab.
+1. Click a playlist (or "Liked Songs") in the left sidebar to preview its
+   tracks in the **Tracks** tab.
+2. Check the "Select whole playlist" box to grab everything, or check
+   individual tracks to cherry-pick just a few, then click **Download
+   Selected**. Already-downloaded tracks are skipped automatically. Click
+   **Stop** on the **Downloads** tab at any point to cancel the rest of the
+   queue — anything already downloaded is kept; **Retry Failed** re-queues
+   just the ones that failed.
+3. Browse your local library, search, filter by status, sort by column,
+   reveal files in your file manager, or queue a re-download from the
+   **Library** tab.
 
 Downloaded files are organized under your configured library folder
 (default `~/Music/YTMusicSync`), one folder per playlist:
