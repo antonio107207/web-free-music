@@ -16,18 +16,17 @@ if [[ ! -x "$VENV_BIN" ]]; then
     exit 1
 fi
 
-ICON_NAME="ytmusic-sync"
-ICON_THEME_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
 APPS_DIR="$HOME/.local/share/applications"
-mkdir -p "$ICON_THEME_DIR" "$APPS_DIR"
+mkdir -p "$APPS_DIR"
 
-# Installing the icon into the standard XDG icon theme location lets the
-# desktop file reference it by name (Icon=ytmusic-sync) instead of an
-# absolute path, so the .desktop file itself stays portable/re-runnable.
-cp "$ICON_SOURCE" "$ICON_THEME_DIR/$ICON_NAME.png"
-
+# Using the icon's absolute path directly (rather than installing it into the
+# XDG icon theme and referencing it by name) sidesteps icon-theme-cache
+# lookup flakiness -- the theme-name approach didn't reliably render on all
+# desktops we tested. The path below is filled in fresh on whatever machine
+# this script runs on, so the *installed* .desktop file is machine-specific --
+# only the git-tracked ytmusic-sync.desktop.in template stays portable.
 DESKTOP_FILE="$APPS_DIR/ytmusic-sync.desktop"
-sed -e "s|@EXEC@|$VENV_BIN|" -e "s|@ICON@|$ICON_NAME|" "$TEMPLATE" > "$DESKTOP_FILE"
+sed -e "s|@EXEC@|$VENV_BIN|" -e "s|@ICON@|$ICON_SOURCE|" "$TEMPLATE" > "$DESKTOP_FILE"
 chmod +x "$DESKTOP_FILE"
 echo "Installed app-menu entry: $DESKTOP_FILE"
 
@@ -36,12 +35,14 @@ DESKTOP_DIR="${DESKTOP_DIR:-$HOME/Desktop}"
 if [[ -d "$DESKTOP_DIR" ]]; then
     cp "$DESKTOP_FILE" "$DESKTOP_DIR/ytmusic-sync.desktop"
     chmod +x "$DESKTOP_DIR/ytmusic-sync.desktop"
-    gio set "$DESKTOP_DIR/ytmusic-sync.desktop" metadata::trusted true 2>/dev/null || true
     echo "Installed Desktop icon: $DESKTOP_DIR/ytmusic-sync.desktop"
-    echo "If your file manager still shows it as untrusted, right-click it and choose 'Allow Launching'."
+    # GNOME/Nautilus deliberately shows untrusted .desktop files with a generic
+    # icon and won't run them until you confirm this once via its own UI -- there
+    # is no supported CLI/gio way to pre-approve this (by design, to stop scripts
+    # from silently self-trusting an executable).
+    echo "Right-click it in Nautilus and choose 'Allow Launching' to see the real icon and enable double-click launch."
 fi
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS_DIR" || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
 echo "Done."
