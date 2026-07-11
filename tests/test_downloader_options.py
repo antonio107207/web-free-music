@@ -1,7 +1,13 @@
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from ytmusic_sync.sync.downloader import build_ydl_opts, download_track
+import pytest
+import requests
+from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3
+
+from ytmusic_sync.sync.downloader import build_ydl_opts, download_track, tag_mp3
 from ytmusic_sync.sync.tasks import DownloadTask
 
 
@@ -61,3 +67,85 @@ def test_download_track_moves_file_to_canonical_path_and_tags(tmp_path: Path) ->
     mock_tag.assert_called_once()
     called_path, called_task = mock_tag.call_args[0]
     assert called_task is task
+
+
+@pytest.fixture
+def real_mp3(tmp_path: Path) -> Path:
+    """A tiny but real mp3 file, since tag_mp3 needs actual ID3-writable audio
+    (ffmpeg is already a hard runtime dependency of this app, checked on
+    startup, so relying on it in tests is consistent with that)."""
+    path = tmp_path / "sample.mp3"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-codec:a", "libmp3lame", "-qscale:a", "9", str(path), "-loglevel", "error",
+        ],
+        check=True,
+    )
+    return path
+
+
+def _tag_task(thumbnail_url: str | None = None) -> DownloadTask:
+    return DownloadTask(
+        video_id="abc123",
+        title="My Song",
+        artist="My Artist",
+        album="My Album",
+        duration_seconds=120,
+        thumbnail_url=thumbnail_url,
+        playlist_title="My Mix",
+    )
+
+
+def test_tag_mp3_sets_text_tags(real_mp3: Path) -> None:
+    tag_mp3(real_mp3, _tag_task())
+    tags = EasyID3(str(real_mp3))
+    assert tags["title"] == ["My Song"]
+    assert tags["artist"] == ["My Artist"]
+    assert tags["album"] == ["My Album"]
+
+
+def test_tag_mp3_embeds_cover_art_from_thumbnail_url(real_mp3: Path) -> None:
+    fake_response = MagicMock()
+    fake_response.content = b"FAKE_JPEG_BYTES"
+    fake_response.raise_for_status = lambda: None
+
+    with patch("ytmusic_sync.sync.downloader.requests.get", return_value=fake_response) as mock_get:
+        tag_mp3(real_mp3, _tag_task(thumbnail_url="https://example.com/cover.jpg"))
+
+    mock_get.assert_called_once_with("https://example.com/cover.jpg", timeout=10)
+    apics = ID3(str(real_mp3)).getall("APIC")
+    assert len(apics) == 1
+    assert apics[0].data == b"FAKE_JPEG_BYTES"
+    assert apics[0].mime == "image/jpeg"
+
+
+def test_tag_mp3_detects_png_cover_art_mime_type(real_mp3: Path) -> None:
+    fake_response = MagicMock()
+    fake_response.content = b"FAKE_PNG_BYTES"
+    fake_response.raise_for_status = lambda: None
+
+    with patch("ytmusic_sync.sync.downloader.requests.get", return_value=fake_response):
+        tag_mp3(real_mp3, _tag_task(thumbnail_url="https://example.com/cover.png?rs=1"))
+
+    apics = ID3(str(real_mp3)).getall("APIC")
+    assert apics[0].mime == "image/png"
+
+
+def test_tag_mp3_skips_cover_art_when_no_thumbnail_url(real_mp3: Path) -> None:
+    with patch("ytmusic_sync.sync.downloader.requests.get") as mock_get:
+        tag_mp3(real_mp3, _tag_task(thumbnail_url=None))
+
+    mock_get.assert_not_called()
+    assert ID3(str(real_mp3)).getall("APIC") == []
+
+
+def test_tag_mp3_does_not_fail_when_cover_art_download_fails(real_mp3: Path) -> None:
+    with patch(
+        "ytmusic_sync.sync.downloader.requests.get", side_effect=requests.RequestException("boom")
+    ):
+        tag_mp3(real_mp3, _tag_task(thumbnail_url="https://example.com/broken.jpg"))  # must not raise
+
+    assert ID3(str(real_mp3)).getall("APIC") == []
+    # text tags still got set despite the cover art failure
+    assert EasyID3(str(real_mp3))["title"] == ["My Song"]

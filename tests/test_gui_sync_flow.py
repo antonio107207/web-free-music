@@ -316,3 +316,83 @@ def test_stop_button_prevents_a_queued_track_from_ever_downloading(qtbot, tmp_pa
     assert "v2" not in started
     statuses = window._repo.get_statuses(["v1", "v2"])
     assert statuses == {"v1": "failed", "v2": "failed"}
+
+
+def test_retry_failed_requeues_only_failed_tracks(qtbot, tmp_path: Path, monkeypatch) -> None:
+    playlists = [RemotePlaylist("PL1", "My Mix", 2)]
+    tracks_by_playlist = {
+        "PL1": [
+            RemoteTrack("v1", "Song One", "Artist A", None, 100, None, True),
+            RemoteTrack("v2", "Song Two", "Artist B", None, 100, None, True),
+        ],
+    }
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    attempt_count = {"v1": 0}
+    downloaded = []
+
+    def fake_download_track(task, library_root, quality_kbps, progress_hook):
+        if task.video_id == "v1":
+            attempt_count["v1"] += 1
+            if attempt_count["v1"] == 1:
+                raise RuntimeError("simulated failure")
+        final = library_root / f"{task.video_id}.mp3"
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_bytes(b"fake")
+        downloaded.append(task.video_id)
+        return final
+
+    monkeypatch.setattr("ytmusic_sync.gui.workers.download_track", fake_download_track)
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+
+    window._on_playlist_selection_changed("PL1", True)
+    window._sidebar.set_playlists(playlists, {"PL1"})
+    window._on_sync_now_clicked()
+
+    # waiting on _pending_download_count alone races: it's already 0 before the
+    # background PlanWorker has even started, so wait for real activity first.
+    qtbot.waitUntil(lambda: len(downloaded) >= 1, timeout=5000)
+    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    assert set(downloaded) == {"v2"}
+    assert window._repo.get_statuses(["v1", "v2"]) == {"v1": "failed", "v2": "downloaded"}
+    assert window._retry_failed_button.isEnabled() is True
+
+    window._on_retry_failed_clicked()
+    assert window._retry_failed_button.isEnabled() is False  # disabled immediately while retry runs
+
+    qtbot.waitUntil(lambda: len(downloaded) >= 2, timeout=5000)
+    qtbot.waitUntil(lambda: window._sync_now_button.isEnabled(), timeout=5000)
+    # v1 was retried and succeeded this time; v2 was never re-downloaded
+    assert downloaded == ["v2", "v1"]
+    assert window._repo.get_statuses(["v1", "v2"]) == {"v1": "downloaded", "v2": "downloaded"}
+    assert window._retry_failed_button.isEnabled() is False  # nothing left to retry
+
+
+def test_retry_failed_button_disabled_with_no_failures(
+    qtbot, tmp_path: Path, monkeypatch, fake_remote_data
+) -> None:
+    playlists, tracks_by_playlist = fake_remote_data
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlists",
+        lambda self: playlists,
+    )
+    monkeypatch.setattr(
+        "ytmusic_sync.remote.client.YTMusicClient.list_playlist_tracks",
+        lambda self, playlist_id: tracks_by_playlist[playlist_id],
+    )
+
+    window = MainWindow(FakeAuthManager(), FakePaths(tmp_path))
+    qtbot.addWidget(window)
+    assert window._retry_failed_button.isEnabled() is False
+
+    window._on_retry_failed_clicked()  # should be a no-op, nothing to retry
+    assert window._pending_download_count == 0

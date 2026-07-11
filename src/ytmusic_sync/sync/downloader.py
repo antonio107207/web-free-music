@@ -6,12 +6,15 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+import requests
 import yt_dlp
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3NoHeaderError
+from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from mutagen.mp3 import MP3
 
 from ytmusic_sync.sync.tasks import DownloadTask
+
+_COVER_ART_TIMEOUT_SECONDS = 10
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 ProgressHook = Callable[[dict], None]
@@ -39,10 +42,28 @@ def build_ydl_opts(out_template: str, quality_kbps: str, progress_hook: Progress
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": quality_kbps},
             {"key": "FFmpegMetadata", "add_metadata": True},
-            {"key": "EmbedThumbnail"},
         ],
-        "writethumbnail": True,
     }
+
+
+def _embed_cover_art(path: Path, thumbnail_url: str) -> None:
+    """Downloads the track's album-art thumbnail (from ytmusicapi's own track
+    metadata, which is more reliable/higher-quality than scraping the video
+    page) and embeds it as the mp3's cover art. Not fatal if it fails -- the
+    track itself already downloaded fine, a missing cover just isn't worth
+    failing the whole track over.
+    """
+    try:
+        response = requests.get(thumbnail_url, timeout=_COVER_ART_TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except requests.RequestException:
+        return
+
+    mime = "image/png" if thumbnail_url.lower().split("?")[0].endswith(".png") else "image/jpeg"
+    id3 = ID3(str(path))
+    id3.delall("APIC")
+    id3.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=response.content))
+    id3.save()
 
 
 def tag_mp3(path: Path, task: DownloadTask) -> None:
@@ -59,6 +80,9 @@ def tag_mp3(path: Path, task: DownloadTask) -> None:
     if task.album:
         tags["album"] = task.album
     tags.save()
+
+    if task.thumbnail_url:
+        _embed_cover_art(path, task.thumbnail_url)
 
 
 def download_track(

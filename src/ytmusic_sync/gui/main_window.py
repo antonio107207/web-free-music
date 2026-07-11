@@ -62,6 +62,8 @@ class MainWindow(QMainWindow):
         self._pending_download_count = 0
         self._active_tracks_playlist_id: str | None = None
         self._cancel_event: threading.Event | None = None
+        self._current_batch_tasks: dict[str, DownloadTask] = {}
+        self._failed_tasks: dict[str, DownloadTask] = {}
 
         self.setWindowTitle("YT Music Sync")
         self.resize(900, 640)
@@ -78,6 +80,10 @@ class MainWindow(QMainWindow):
         self._stop_button.setEnabled(False)
         self._stop_button.clicked.connect(self._on_stop_clicked)
 
+        self._retry_failed_button = QPushButton("Retry Failed")
+        self._retry_failed_button.setEnabled(False)
+        self._retry_failed_button.clicked.connect(self._on_retry_failed_clicked)
+
         self._progress_panel = ProgressPanel()
 
         self._sync_tab = QWidget()
@@ -85,6 +91,7 @@ class MainWindow(QMainWindow):
         sync_buttons_row = QHBoxLayout()
         sync_buttons_row.addWidget(self._sync_now_button)
         sync_buttons_row.addWidget(self._stop_button)
+        sync_buttons_row.addWidget(self._retry_failed_button)
         sync_layout.addLayout(sync_buttons_row)
         sync_layout.addWidget(self._progress_panel, stretch=1)
 
@@ -281,6 +288,7 @@ class MainWindow(QMainWindow):
         QThreadPool.globalInstance().setMaxThreadCount(max(1, self._settings.max_concurrent_downloads))
 
         self._cancel_event = threading.Event()
+        self._current_batch_tasks = {task.video_id: task for task in tasks}
         self._set_download_controls_enabled(False)
         self._progress_panel.set_tasks(tasks)
         self._pending_download_count = len(tasks)
@@ -304,17 +312,30 @@ class MainWindow(QMainWindow):
         self._stop_button.setEnabled(False)
         self.statusBar().showMessage("Stopping...")
 
+    def _on_retry_failed_clicked(self) -> None:
+        if self._pending_download_count > 0 or not self._failed_tasks:
+            return
+        tasks = list(self._failed_tasks.values())
+        self._failed_tasks = {}
+        self._tabs.setCurrentWidget(self._sync_tab)
+        self._start_downloads(tasks)
+
     def _set_download_controls_enabled(self, enabled: bool) -> None:
         self._sync_now_button.setEnabled(enabled)
         self._tracks_view.set_downloading_enabled(enabled)
         self._stop_button.setEnabled(not enabled)
+        self._retry_failed_button.setEnabled(enabled and bool(self._failed_tasks))
 
     def _on_track_finished(self, video_id: str, success: bool, message: str) -> None:
         self._progress_panel.mark_finished(video_id, success, message)
         if success:
             self._repo.mark_downloaded(video_id, message)
+            self._failed_tasks.pop(video_id, None)
         else:
             self._repo.mark_failed(video_id, message)
+            task = self._current_batch_tasks.get(video_id)
+            if task is not None:
+                self._failed_tasks[video_id] = task
 
         self._pending_download_count -= 1
         if self._pending_download_count <= 0:

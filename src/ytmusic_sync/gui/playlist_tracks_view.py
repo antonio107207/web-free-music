@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ytmusic_sync.gui.status_labels import STATUS_LABELS
 from ytmusic_sync.remote.models import RemoteTrack
 
 _COL_TITLE = 0
@@ -21,14 +22,6 @@ _COL_ALBUM = 2
 _COL_DURATION = 3
 _COL_STATUS = 4
 _VIDEO_ID_ROLE = Qt.ItemDataRole.UserRole
-
-_STATUS_LABELS = {
-    "pending": "Not downloaded",
-    "downloading": "Downloading...",
-    "downloaded": "Downloaded",
-    "failed": "Failed",
-    "unavailable": "Unavailable",
-}
 
 
 def _format_duration(seconds: int | None) -> str:
@@ -93,7 +86,7 @@ class PlaylistTracksView(QWidget):
         self._table.setRowCount(len(tracks))
         for row, track in enumerate(tracks):
             status_key = statuses.get(track.video_id, "pending" if track.is_available else "unavailable")
-            status_text = _STATUS_LABELS.get(status_key, status_key)
+            status_text = STATUS_LABELS.get(status_key, status_key)
 
             title_item = QTableWidgetItem(track.title)
             title_item.setFlags(title_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
