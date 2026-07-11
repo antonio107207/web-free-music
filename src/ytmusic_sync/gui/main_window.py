@@ -32,6 +32,7 @@ from ytmusic_sync.remote.client import YTMusicClient
 from ytmusic_sync.remote.models import RemotePlaylist
 from ytmusic_sync.storage.repository import LibraryRepository
 from ytmusic_sync.sync.planner import refresh_playlist_folder_links
+from ytmusic_sync.sync.tasks import DownloadTask
 
 
 class MainWindow(QMainWindow):
@@ -63,16 +64,17 @@ class MainWindow(QMainWindow):
 
         self._progress_panel = ProgressPanel()
 
-        sync_tab = QWidget()
-        sync_layout = QVBoxLayout(sync_tab)
+        self._sync_tab = QWidget()
+        sync_layout = QVBoxLayout(self._sync_tab)
         sync_layout.addWidget(self._sync_now_button)
         sync_layout.addWidget(self._progress_panel, stretch=1)
 
         self._tracks_view = PlaylistTracksView()
+        self._tracks_view.download_selected_requested.connect(self._on_download_selected_requested)
         self._library_browser = LibraryBrowser(self._repo)
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(sync_tab, "Sync")
+        self._tabs.addTab(self._sync_tab, "Sync")
         self._tabs.addTab(self._tracks_view, "Tracks")
         self._tabs.addTab(self._library_browser, "Library")
 
@@ -183,6 +185,10 @@ class MainWindow(QMainWindow):
         playlist = next((p for p in self._remote_playlists if p.playlist_id == playlist_id), None)
         if playlist is None:
             return
+        # Keep the local index up to date with what's actually in the playlist right
+        # now, so per-track status/downloads work even if this playlist was never
+        # checked for whole-playlist sync.
+        self._repo.upsert_remote_snapshot(playlist, tracks)
         statuses = self._repo.get_statuses([t.video_id for t in tracks])
         self._tracks_view.show_tracks(playlist.title, tracks, statuses)
 
@@ -196,12 +202,15 @@ class MainWindow(QMainWindow):
     def _on_sync_now_clicked(self) -> None:
         if self._client is None:
             return
+        if self._pending_download_count > 0:
+            QMessageBox.information(self, "Download in progress", "Please wait for the current download to finish.")
+            return
         selected_ids = self._sidebar.selected_playlist_ids()
         if not selected_ids:
             QMessageBox.information(self, "Nothing selected", "Select at least one playlist to sync.")
             return
 
-        self._sync_now_button.setEnabled(False)
+        self._set_download_controls_enabled(False)
         self.statusBar().showMessage("Planning sync...")
         plan_worker = PlanWorker(
             self._paths.db_file, self._client, selected_ids, self._remote_playlists, self._plan_signals
@@ -209,18 +218,42 @@ class MainWindow(QMainWindow):
         QThreadPool.globalInstance().start(plan_worker)
 
     def _on_plan_failed(self, message: str) -> None:
-        self._sync_now_button.setEnabled(True)
+        self._set_download_controls_enabled(True)
         QMessageBox.critical(self, "Sync planning failed", message)
 
     def _on_plan_ready(self, tasks: list) -> None:
         if not tasks:
             self.statusBar().showMessage("Everything is already up to date.")
-            self._sync_now_button.setEnabled(True)
+            self._set_download_controls_enabled(True)
+            return
+        self._start_downloads(tasks)
+
+    def _on_download_selected_requested(self, tracks: list) -> None:
+        if self._client is None:
+            return
+        if self._pending_download_count > 0:
+            QMessageBox.information(self, "Download in progress", "Please wait for the current download to finish.")
             return
 
+        tasks = [
+            DownloadTask(
+                video_id=t.video_id,
+                title=t.title,
+                artist=t.artist,
+                album=t.album,
+                duration_seconds=t.duration_seconds,
+                thumbnail_url=t.thumbnail_url,
+            )
+            for t in tracks
+        ]
+        self._tabs.setCurrentWidget(self._sync_tab)
+        self._start_downloads(tasks)
+
+    def _start_downloads(self, tasks: list[DownloadTask]) -> None:
         self._settings = Settings.load(self._paths.settings_file)
         QThreadPool.globalInstance().setMaxThreadCount(max(1, self._settings.max_concurrent_downloads))
 
+        self._set_download_controls_enabled(False)
         self._progress_panel.set_tasks(tasks)
         self._pending_download_count = len(tasks)
         self.statusBar().showMessage(f"Downloading {len(tasks)} track(s)...")
@@ -232,6 +265,10 @@ class MainWindow(QMainWindow):
             )
             QThreadPool.globalInstance().start(worker)
 
+    def _set_download_controls_enabled(self, enabled: bool) -> None:
+        self._sync_now_button.setEnabled(enabled)
+        self._tracks_view.set_downloading_enabled(enabled)
+
     def _on_track_finished(self, video_id: str, success: bool, message: str) -> None:
         self._progress_panel.mark_finished(video_id, success, message)
         if success:
@@ -242,7 +279,7 @@ class MainWindow(QMainWindow):
         self._pending_download_count -= 1
         if self._pending_download_count <= 0:
             refresh_playlist_folder_links(self._repo, self._settings.library_root)
-            self._sync_now_button.setEnabled(True)
+            self._set_download_controls_enabled(True)
             self.statusBar().showMessage("Sync complete.")
             self._library_browser.refresh()
             if self._active_tracks_playlist_id is not None:

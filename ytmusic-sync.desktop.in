@@ -2,7 +2,7 @@
 Type=Application
 Name=YT Music Sync
 Comment=Sync your YouTube Music playlists to a local MP3 library
-Exec=ytmusic-sync
-Icon=audio-x-generic
+Exec=@EXEC@
+Icon=@ICON@
 Terminal=false
 Categories=AudioVideo;Audio;
