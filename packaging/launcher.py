@@ -4,7 +4,7 @@
 With YTS_SMOKE_TEST=1 the frozen app instead checks that the pieces most
 likely to break in a bundle actually work -- QtWebEngine can render a page
 and ffmpeg is discoverable -- then exits 0 on success. CI runs this on every
-build, which is how the macOS .app gets verified without a Mac at hand.
+build.
 """
 import os
 import sys
@@ -17,11 +17,8 @@ def _smoke_test() -> int:
     from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWidgets import QApplication
 
-    from ytmusic_sync.app import _extend_path_for_ffmpeg
-
     app = QApplication(sys.argv)
 
-    _extend_path_for_ffmpeg()
     for tool in ("ffmpeg", "ffprobe"):
         found = shutil.which(tool)
         print(f"smoke: {tool} = {found}", flush=True)

@@ -1,36 +1,20 @@
-# PyInstaller spec shared by the Linux and macOS builds.
+# PyInstaller spec for the Linux build.
 #
-# Run from the repo root via packaging/linux/build_deb.sh or
-# packaging/macos/build_dmg.sh rather than directly -- those scripts set the
-# environment variables read below and wrap the output into an installer.
-#
-#   YTS_VERSION     app version for the macOS Info.plist (default 0.0.0)
-#   YTS_FFMPEG_DIR  directory holding ffmpeg + ffprobe binaries to bundle
-#                   into bin/ (macOS only; Linux depends on the distro's ffmpeg)
-#   YTS_ICNS        path to the .icns icon for the macOS .app
+# Run from the repo root via packaging/linux/build_deb.sh rather than
+# directly -- that script wraps the output into a .deb.
 import os
 import re
-import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).parent
-APP_NAME = "YT Music Sync"
-VERSION = os.environ.get("YTS_VERSION", "0.0.0")
 
 datas = collect_data_files("ytmusic_sync") + collect_data_files("ytmusicapi")
-
-binaries = []
-ffmpeg_dir = os.environ.get("YTS_FFMPEG_DIR")
-if ffmpeg_dir:
-    for tool in ("ffmpeg", "ffprobe"):
-        binaries.append((str(Path(ffmpeg_dir) / tool), "bin"))
 
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(ROOT / "src")],
-    binaries=binaries,
     datas=datas,
     # Test-only Qt modules that PySide6's hooks would otherwise drag in.
     excludes=["pytest", "pytestqt", "PySide6.QtTest"],
@@ -47,8 +31,7 @@ QT_MODULES_KEEP = {
     "XcbQpa", "WaylandClient", "WlShellIntegration", "EglFSDeviceIntegration",
     "EglFsKmsSupport",
 }
-# libQt6Foo.so.6 on Linux, QtFoo.framework/... on macOS.
-_QT_MODULE_RE = re.compile(r"(?:libQt6|(?:^|/)Qt)([A-Za-z0-9]+?)(?:\.so|\.framework)")
+_QT_MODULE_RE = re.compile(r"libQt6([A-Za-z0-9]+?)\.so")
 _DROP_PREFIXES = tuple(
     os.path.join("PySide6", "Qt", *parts)
     for parts in (("qml",), ("plugins", "qmltooling"), ("plugins", "position"))
@@ -94,17 +77,3 @@ coll = COLLECT(
     name="ytmusic-sync",
 )
 
-if sys.platform == "darwin":
-    app = BUNDLE(
-        coll,
-        name=f"{APP_NAME}.app",
-        icon=os.environ.get("YTS_ICNS"),
-        bundle_identifier="io.github.antonio107207.ytmusic-sync",
-        version=VERSION,
-        info_plist={
-            "CFBundleShortVersionString": VERSION,
-            "CFBundleVersion": VERSION,
-            "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "12.0",
-        },
-    )
