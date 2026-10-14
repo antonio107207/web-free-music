@@ -1,0 +1,100 @@
+name: Build installers
+
+# Builds the Ubuntu .deb and the macOS .dmg files. Run it by hand from the
+# Actions tab, or push a tag like v0.2.0 to also attach them to a GitHub release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported Ubuntu: the bundled binaries need the build
+          # machine's glibc or newer, so this .deb runs on 22.04 and later.
+          - os: ubuntu-22.04
+            script: packaging/linux/build_deb.sh
+          - os: macos-14          # Apple Silicon (arm64)
+            script: packaging/macos/build_dmg.sh
+          - os: macos-15-intel    # Intel (x86_64)
+            script: packaging/macos/build_dmg.sh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libxcb-cursor0 libxkbcommon-x11-0 libegl1
+
+      - name: Install ffmpeg for tests (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+
+      - name: Build installer
+        run: bash ${{ matrix.script }}
+
+      # Runs the frozen app in self-check mode: QtWebEngine must render a page
+      # and ffmpeg/ffprobe must be found. On macOS they must come from inside
+      # the .app, not from the Homebrew copy installed above for the tests.
+      - name: Smoke-test the bundled app (Linux)
+        if: runner.os == 'Linux'
+        env:
+          YTS_SMOKE_TEST: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: timeout 120 build/pyinstaller/dist/ytmusic-sync/ytmusic-sync
+
+      - name: Smoke-test the bundled app (macOS)
+        if: runner.os == 'macOS'
+        env:
+          YTS_SMOKE_TEST: "1"
+        run: |
+          out="$(build/macos/dist/"YT Music Sync.app"/Contents/MacOS/ytmusic-sync 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          echo "$out" | grep -q "smoke: ffmpeg = .*\.app/"
+          echo "$out" | grep -q "smoke: ffprobe = .*\.app/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            dist/*.deb
+            dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach installers to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

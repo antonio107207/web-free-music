@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-qt", "ruff"]
+build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 ytmusic-sync = "ytmusic_sync.app:main"

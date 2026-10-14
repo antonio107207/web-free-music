@@ -16,7 +16,30 @@ your own personal backups.
   - Arch: `sudo pacman -S ffmpeg`
 - A YouTube Music account (logged in via your browser)
 
-## Install
+## Install from a prebuilt installer
+
+Download the file for your system from the
+[Releases](https://github.com/antonio107207/web-free-music/releases) page.
+
+- **Ubuntu 22.04+ / Debian** — `ytmusic-sync_<version>_amd64.deb`:
+
+  ```bash
+  sudo apt install ./ytmusic-sync_<version>_amd64.deb
+  ```
+
+  This pulls in `ffmpeg` automatically and adds "YT Music Sync" to the app
+  menu. Uninstall with `sudo apt remove ytmusic-sync`.
+
+- **macOS 12+** — `ytmusic-sync_<version>_macos-arm64.dmg` (Apple Silicon) or
+  `..._macos-x86_64.dmg` (Intel). Open it and drag the app into Applications.
+  ffmpeg is bundled. The app isn't signed with an Apple Developer ID, so the
+  first launch is blocked: right-click the app → **Open**, or go to System
+  Settings → Privacy & Security → **Open Anyway**. You only need to do this once.
+
+The installers bundle a fixed `yt-dlp` version. If downloads start failing
+after a YouTube change, update to a newer release of the app.
+
+## Install from source
 
 ```bash
 python3 -m venv .venv
@@ -118,6 +141,29 @@ Settings (library folder, MP3 bitrate, max concurrent downloads) are under
 ```bash
 pip install -e ".[dev]"
 pytest
+```
+
+### Building the installers
+
+Each installer is built on its own OS (PyInstaller can't cross-compile):
+
+```bash
+pip install -e ".[build]"
+packaging/linux/build_deb.sh     # on Ubuntu -> dist/*.deb
+packaging/macos/build_dmg.sh     # on macOS  -> dist/*.dmg (for the Mac's own CPU)
+```
+
+Build the `.deb` on the oldest Ubuntu you want to support, because the bundled
+libraries need that glibc version or newer.
+
+The **Build installers** GitHub Actions workflow builds the Ubuntu `.deb` and
+both macOS `.dmg` files (arm64 + x86_64). It also smoke-tests each bundle with
+`YTS_SMOKE_TEST=1`, which checks that QtWebEngine renders and that ffmpeg is
+found. Run it from the Actions tab, or push a `v*` tag to also publish the
+installers as a GitHub release:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 CLI sync (for testing the download engine without the GUI):
